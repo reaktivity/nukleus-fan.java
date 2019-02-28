@@ -13,7 +13,7 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
-package org.reaktivity.nukleus.echo.internal.control;
+package org.reaktivity.nukleus.fan.internal.control;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.rules.RuleChain.outerRule;
@@ -26,10 +26,9 @@ import org.junit.rules.Timeout;
 import org.kaazing.k3po.junit.annotation.ScriptProperty;
 import org.kaazing.k3po.junit.annotation.Specification;
 import org.kaazing.k3po.junit.rules.K3poRule;
-import org.reaktivity.nukleus.fan.internal.FanController;
 import org.reaktivity.reaktor.test.ReaktorRule;
 
-public class ControllerIT
+public class ControlIT
 {
     private final K3poRule k3po = new K3poRule()
         .addScriptRoot("route", "org/reaktivity/specification/nukleus/fan/control/route")
@@ -39,65 +38,41 @@ public class ControllerIT
     private final TestRule timeout = new DisableOnDebug(new Timeout(5, SECONDS));
 
     private final ReaktorRule reaktor = new ReaktorRule()
-        .directory("target/nukleus-itests")
-        .commandBufferCapacity(1024)
-        .responseBufferCapacity(1024)
-        .counterValuesBufferCapacity(4096)
-        .controller("fan"::equals);
+            .directory("target/nukleus-itests")
+            .commandBufferCapacity(1024)
+            .responseBufferCapacity(1024)
+            .counterValuesBufferCapacity(4096)
+            .nukleus("fan"::equals);
 
     @Rule
     public final TestRule chain = outerRule(k3po).around(timeout).around(reaktor);
 
     @Test
     @Specification({
-        "${route}/server/nukleus"
+        "${route}/server/controller"
     })
     public void shouldRouteServer() throws Exception
     {
-        k3po.start();
-
-        reaktor.controller(FanController.class)
-               .routeServer("fan#0", "target#0")
-               .get();
-
         k3po.finish();
     }
 
     @Test
     @Specification({
-        "${route}/server/nukleus",
-        "${unroute}/server/nukleus"
+        "${route}/server/controller",
+        "${unroute}/server/controller"
     })
     public void shouldUnrouteServer() throws Exception
     {
-        k3po.start();
-
-        long routeId = reaktor.controller(FanController.class)
-                .routeServer("fan#0", "target#0")
-                .get();
-
-        k3po.notifyBarrier("ROUTED_SERVER");
-
-        reaktor.controller(FanController.class)
-               .unroute(routeId)
-               .get();
-
         k3po.finish();
     }
 
     @Test
     @Specification({
-        "${freeze}/nukleus"
+        "${freeze}/controller",
     })
-    @ScriptProperty("nameF00N \"fan\"")
+    @ScriptProperty("nameF00C \"fan\"")
     public void shouldFreeze() throws Exception
     {
-        k3po.start();
-
-        reaktor.controller(FanController.class)
-               .freeze()
-               .get();
-
         k3po.finish();
     }
 }
