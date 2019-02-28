@@ -119,6 +119,7 @@ public final class FanServerFactory implements StreamFactory
         final MessageConsumer replyTo)
     {
         final long routeId = begin.routeId();
+        final long correlationId = begin.correlationId();
 
         final MessagePredicate filter = (t, b, o, l) -> true;
         final RouteFW route = router.resolve(routeId, begin.authorization(), filter, wrapRoute);
@@ -136,8 +137,9 @@ public final class FanServerFactory implements StreamFactory
                     group,
                     routeId,
                     initialId,
+                    correlationId,
                     replyId,
-                    replyTo)::handleStream;
+                    replyTo)::onStream;
         }
 
         return newStream;
@@ -156,7 +158,7 @@ public final class FanServerFactory implements StreamFactory
         if (group != null && group.replyId == replyId)
         {
             assert group.receiver == replyTo;
-            newStream = group::handleStream;
+            newStream = group::onStream;
         }
 
         return newStream;
@@ -182,13 +184,15 @@ public final class FanServerFactory implements StreamFactory
         private final long routeId;
         private final long initialId;
         private final long replyId;
+        private long correlationId;
         private final MessageConsumer receiver;
         private final List<FanServer> members;
 
-        private int budget;
-        private int padding;
+        private int initialBudget;
+        private int initialPadding;
 
-        private int memberBudget;
+        private int replyBudget;
+        private int replyPadding;
 
         FanServerGroup(
             long routeId)
@@ -196,14 +200,15 @@ public final class FanServerFactory implements StreamFactory
             this.routeId = routeId;
             this.initialId = supplyInitialId.applyAsLong(routeId);
             this.replyId = supplyReplyId.applyAsLong(initialId);
+            this.correlationId = supplyCorrelationId.getAsLong();
             this.receiver = router.supplyReceiver(initialId);
             this.members = new CopyOnWriteArrayList<>();
 
-            doBegin(receiver, routeId, initialId, supplyCorrelationId.getAsLong());
-            router.setThrottle(initialId, this::handleThrottle);
+            doBegin(receiver, routeId, initialId, correlationId);
+            router.setThrottle(initialId, this::onThrottle);
         }
 
-        private void handleStream(
+        private void onStream(
             int msgTypeId,
             DirectBuffer buffer,
             int index,
@@ -213,19 +218,19 @@ public final class FanServerFactory implements StreamFactory
             {
             case BeginFW.TYPE_ID:
                 final BeginFW begin = beginRO.wrap(buffer, index, index + length);
-                handleBegin(begin);
+                onBegin(begin);
                 break;
             case DataFW.TYPE_ID:
                 final DataFW data = dataRO.wrap(buffer, index, index + length);
-                handleData(data);
+                onData(data);
                 break;
             case EndFW.TYPE_ID:
                 final EndFW end = endRO.wrap(buffer, index, index + length);
-                handleEnd(end);
+                onEnd(end);
                 break;
             case AbortFW.TYPE_ID:
                 final AbortFW abort = abortRO.wrap(buffer, index, index + length);
-                handleAbort(abort);
+                onAbort(abort);
                 break;
             default:
                 doReset(receiver, routeId, initialId);
@@ -233,7 +238,7 @@ public final class FanServerFactory implements StreamFactory
             }
         }
 
-        private void handleThrottle(
+        private void onThrottle(
             int msgTypeId,
             DirectBuffer buffer,
             int index,
@@ -243,11 +248,11 @@ public final class FanServerFactory implements StreamFactory
             {
             case ResetFW.TYPE_ID:
                 final ResetFW reset = resetRO.wrap(buffer, index, index + length);
-                handleReset(reset);
+                onReset(reset);
                 break;
             case WindowFW.TYPE_ID:
                 final WindowFW window = windowRO.wrap(buffer, index, index + length);
-                handleWindow(window);
+                onWindow(window);
                 break;
             default:
                 // ignore
@@ -255,29 +260,42 @@ public final class FanServerFactory implements StreamFactory
             }
         }
 
-        private void handleBegin(
+        private void onBegin(
             BeginFW begin)
         {
-            // ignore (reply stream)
+            assert correlationId == begin.correlationId();
+
+            final long traceId = begin.trace();
+
+            this.correlationId = 0L;
+
+            for (int i=0; i < members.size(); i++)
+            {
+                final FanServer member = members.get(i);
+                member.sendReplyBegin(traceId);
+            }
         }
 
-        private void handleData(
+        private void onData(
             DataFW data)
         {
+            final long traceId = data.trace();
             final int flags = data.flags();
             final long groupId = data.groupId();
             final int padding = data.padding();
             final OctetsFW payload = data.payload();
             final OctetsFW extension = data.extension();
 
+            this.replyBudget -= payload.sizeof() + padding;
+
             for (int i=0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
-                doData(member.receiver, member.routeId, member.replyId, flags, groupId, padding, payload, extension);
+                member.sendReplyData(traceId, flags, groupId, padding, payload, extension);
             }
         }
 
-        private void handleEnd(
+        private void onEnd(
             EndFW end)
         {
             for (int i=0; i < members.size(); i++)
@@ -289,7 +307,7 @@ public final class FanServerFactory implements StreamFactory
             doEnd(receiver, routeId, replyId);
         }
 
-        private void handleAbort(
+        private void onAbort(
             AbortFW abort)
         {
             for (int i=0; i < members.size(); i++)
@@ -301,7 +319,7 @@ public final class FanServerFactory implements StreamFactory
             doAbort(receiver, routeId, replyId);
         }
 
-        private void handleReset(
+        private void onReset(
             ResetFW reset)
         {
             for (int i=0; i < members.size(); i++)
@@ -313,20 +331,21 @@ public final class FanServerFactory implements StreamFactory
             doReset(receiver, routeId, initialId);
         }
 
-        private void handleWindow(
+        private void onWindow(
             WindowFW window)
         {
             final int credit = window.credit();
             final int padding = window.padding();
+            final long traceId = window.trace();
             final long groupId = window.groupId();
 
-            this.budget += credit;
-            this.padding = padding;
+            this.initialBudget += credit;
+            this.initialPadding = padding;
 
             for (int i=0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
-                doWindow(member.receiver, member.routeId, member.initialId, credit, padding, groupId);
+                member.sendInitialWindow(initialBudget, padding, traceId, groupId);
             }
         }
 
@@ -336,28 +355,33 @@ public final class FanServerFactory implements StreamFactory
             return String.format("[%s] routeId=%016x", getClass().getSimpleName(), routeId);
         }
 
-        private void budgetUpdated()
+        private void sendInitialData(
+            long traceId,
+            int flags,
+            long groupId,
+            int padding,
+            OctetsFW payload,
+            OctetsFW extension)
         {
-            final int memberCount = members.size();
+            this.initialBudget -= payload.sizeof() + padding;
+            doData(receiver, routeId, initialId, traceId, flags, groupId, padding, payload, extension);
+        }
 
-            if (memberCount != 0)
+        private void sendReplyWindow(
+            int minReplyBudget,
+            int minReplyPadding,
+            long traceId)
+        {
+            final int newReplyBudget = Math.max(replyBudget, minReplyBudget);
+            final int newReplyPadding = Math.max(replyPadding, minReplyPadding);
+
+            replyPadding = newReplyPadding;
+
+            final int replyCredit = newReplyBudget - replyBudget;
+            if (replyCredit > 0)
             {
-                int minBudget = Integer.MAX_VALUE;
-                int maxPadding = 0;
-
-                for (int i=0; i < memberCount; i++)
-                {
-                    final FanServer member = members.get(i);
-                    minBudget = Math.min(minBudget, member.budget);
-                    maxPadding = Math.max(maxPadding, member.padding);
-                }
-
-                final int credit = minBudget - memberBudget;
-                if (credit > 0)
-                {
-                    doWindow(receiver, routeId, replyId, credit, maxPadding, 0L);
-                    memberBudget = minBudget;
-                }
+                doWindow(receiver, routeId, replyId, traceId, replyCredit, newReplyPadding, 0L);
+                replyBudget = newReplyBudget;
             }
         }
 
@@ -382,13 +406,16 @@ public final class FanServerFactory implements StreamFactory
         private final long replyId;
         private final MessageConsumer receiver;
 
-        private int budget;
-        private int padding;
+        private int initialBudget;
+        private int replyBudget;
+        private int replyPadding;
+        private long correlationId;
 
         private FanServer(
             FanServerGroup group,
             long routeId,
             long initialId,
+            long correlationId,
             long replyId,
             MessageConsumer receiver)
         {
@@ -396,10 +423,11 @@ public final class FanServerFactory implements StreamFactory
             this.routeId = routeId;
             this.initialId = initialId;
             this.replyId = replyId;
+            this.correlationId = correlationId;
             this.receiver = receiver;
         }
 
-        private void handleStream(
+        private void onStream(
             int msgTypeId,
             DirectBuffer buffer,
             int index,
@@ -409,16 +437,16 @@ public final class FanServerFactory implements StreamFactory
             {
             case BeginFW.TYPE_ID:
                 final BeginFW begin = beginRO.wrap(buffer, index, index + length);
-                handleBegin(begin);
+                onBegin(begin);
                 group.join(this);
                 break;
             case DataFW.TYPE_ID:
                 final DataFW data = dataRO.wrap(buffer, index, index + length);
-                handleData(data);
+                onData(data);
                 break;
             case EndFW.TYPE_ID:
                 final EndFW end = endRO.wrap(buffer, index, index + length);
-                handleEnd(end);
+                onEnd(end);
                 group.leave(this);
                 break;
             case AbortFW.TYPE_ID:
@@ -433,7 +461,7 @@ public final class FanServerFactory implements StreamFactory
             }
         }
 
-        private void handleThrottle(
+        private void onThrottle(
             int msgTypeId,
             DirectBuffer buffer,
             int index,
@@ -443,12 +471,12 @@ public final class FanServerFactory implements StreamFactory
             {
             case ResetFW.TYPE_ID:
                 final ResetFW reset = resetRO.wrap(buffer, index, index + length);
-                handleReset(reset);
+                onReset(reset);
                 group.leave(this);
                 break;
             case WindowFW.TYPE_ID:
                 final WindowFW window = windowRO.wrap(buffer, index, index + length);
-                handleWindow(window);
+                onWindow(window);
                 break;
             default:
                 // ignore
@@ -456,23 +484,19 @@ public final class FanServerFactory implements StreamFactory
             }
         }
 
-        private void handleBegin(
+        private void onBegin(
             BeginFW begin)
         {
-            final long correlationId = begin.correlationId();
+            assert correlationId == begin.correlationId();
 
-            router.setThrottle(replyId, this::handleThrottle);
-            doBegin(receiver, routeId, replyId, correlationId);
-
-            if (group.budget > 0)
-            {
-                doWindow(receiver, routeId, initialId, group.budget, group.padding, 0L);
-            }
+            sendReplyBegin(supplyTraceId.getAsLong());
+            sendInitialWindow(group.initialBudget, group.initialPadding, supplyTraceId.getAsLong(), 0L);
         }
 
-        private void handleData(
+        private void onData(
             DataFW data)
         {
+            final long traceId = data.trace();
             final int flags = data.flags();
             final long groupId = data.groupId();
             final int padding = data.padding();
@@ -480,10 +504,11 @@ public final class FanServerFactory implements StreamFactory
             final OctetsFW extension = data.extension();
 
             // TODO: buffer slot to prevent exceeding budget of fan-in group
-            doData(group.receiver, group.routeId, group.initialId, flags, groupId, padding, payload, extension);
+            this.initialBudget -= payload.sizeof() + padding;
+            group.sendInitialData(traceId, flags, groupId, padding, payload, extension);
         }
 
-        private void handleEnd(
+        private void onEnd(
             EndFW end)
         {
             doEnd(receiver, routeId, replyId);
@@ -495,25 +520,63 @@ public final class FanServerFactory implements StreamFactory
             doAbort(receiver, routeId, replyId);
         }
 
-        private void handleReset(
+        private void onReset(
             ResetFW reset)
         {
             doReset(receiver, routeId, initialId);
         }
 
-        private void handleWindow(
+        private void onWindow(
             WindowFW window)
         {
             final int credit = window.credit();
             final int padding = window.padding();
 
-            this.budget += credit;
-            this.padding = padding;
+            this.replyBudget += credit;
+            this.replyPadding = padding;
 
-            if (budget > 0) // threshold = 0
+            if (credit > 0 && replyBudget > 0) // threshold = 0
             {
-                group.budgetUpdated();
+                final long traceId = window.trace();
+                group.sendReplyWindow(replyBudget, replyPadding, traceId);
             }
+        }
+
+        private void sendInitialWindow(
+            int maxInitialBudget,
+            int minInitialPadding,
+            long traceId,
+            long groupId)
+        {
+            final int initialCredit = maxInitialBudget - initialBudget;
+            if (initialCredit > 0)
+            {
+                doWindow(receiver, routeId, initialId, traceId, initialCredit, minInitialPadding, groupId);
+                initialBudget = maxInitialBudget;
+            }
+        }
+
+        private void sendReplyBegin(
+            long traceId)
+        {
+            if (group.correlationId == 0L && correlationId != 0L)
+            {
+                router.setThrottle(replyId, this::onThrottle);
+                doBegin(receiver, routeId, replyId, correlationId);
+                correlationId = 0L;
+            }
+        }
+
+        private void sendReplyData(
+            long traceId,
+            int flags,
+            long groupId,
+            int padding,
+            OctetsFW payload,
+            OctetsFW extension)
+        {
+            replyBudget -= payload.sizeof() + padding;
+            doData(receiver, routeId, replyId, traceId, flags, groupId, padding, payload, extension);
         }
     }
 
@@ -537,6 +600,7 @@ public final class FanServerFactory implements StreamFactory
         MessageConsumer receiver,
         long routeId,
         long streamId,
+        long traceId,
         int flags,
         long groupId,
         int padding,
@@ -546,7 +610,7 @@ public final class FanServerFactory implements StreamFactory
         final DataFW data = dataRW.wrap(writeBuffer, 0, writeBuffer.capacity())
                 .routeId(routeId)
                 .streamId(streamId)
-                .trace(supplyTraceId.getAsLong())
+                .trace(traceId)
                 .flags(flags)
                 .groupId(groupId)
                 .padding(padding)
@@ -589,6 +653,7 @@ public final class FanServerFactory implements StreamFactory
         final MessageConsumer sender,
         final long routeId,
         final long streamId,
+        final long traceId,
         final int credit,
         final int padding,
         final long groupId)
@@ -596,7 +661,7 @@ public final class FanServerFactory implements StreamFactory
         final WindowFW window = windowRW.wrap(writeBuffer, 0, writeBuffer.capacity())
                 .routeId(routeId)
                 .streamId(streamId)
-                .trace(supplyTraceId.getAsLong())
+                .trace(traceId)
                 .credit(credit)
                 .padding(padding)
                 .groupId(groupId)
