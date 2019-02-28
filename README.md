@@ -1,4 +1,4 @@
-# Fan Nukleus Java Implementation
+# Fan Nukleus Implementation
 
 [![Build Status][build-status-image]][build-status]
 
