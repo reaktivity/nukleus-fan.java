@@ -204,7 +204,7 @@ public final class FanServerFactory implements StreamFactory
             this.receiver = router.supplyReceiver(initialId);
             this.members = new CopyOnWriteArrayList<>();
 
-            doBegin(receiver, routeId, initialId, correlationId);
+            doBegin(receiver, routeId, initialId, supplyTraceId.getAsLong(), correlationId);
             router.setThrottle(initialId, this::onThrottle);
         }
 
@@ -451,7 +451,7 @@ public final class FanServerFactory implements StreamFactory
                 break;
             case AbortFW.TYPE_ID:
                 final AbortFW abort = abortRO.wrap(buffer, index, index + length);
-                handleAbort(abort);
+                onAbort(abort);
                 group.leave(this);
                 break;
             default:
@@ -514,7 +514,7 @@ public final class FanServerFactory implements StreamFactory
             doEnd(receiver, routeId, replyId);
         }
 
-        private void handleAbort(
+        private void onAbort(
             AbortFW abort)
         {
             doAbort(receiver, routeId, replyId);
@@ -562,7 +562,7 @@ public final class FanServerFactory implements StreamFactory
             if (group.correlationId == 0L && correlationId != 0L)
             {
                 router.setThrottle(replyId, this::onThrottle);
-                doBegin(receiver, routeId, replyId, correlationId);
+                doBegin(receiver, routeId, replyId, traceId, correlationId);
                 correlationId = 0L;
             }
         }
@@ -584,12 +584,13 @@ public final class FanServerFactory implements StreamFactory
         MessageConsumer receiver,
         long routeId,
         long streamId,
+        long traceId,
         long correlationId)
     {
         final BeginFW begin = beginRW.wrap(writeBuffer, 0, writeBuffer.capacity())
                 .routeId(routeId)
                 .streamId(streamId)
-                .trace(supplyTraceId.getAsLong())
+                .trace(traceId)
                 .correlationId(correlationId)
                 .build();
 
