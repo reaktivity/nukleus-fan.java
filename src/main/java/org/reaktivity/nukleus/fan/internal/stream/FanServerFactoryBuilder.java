@@ -37,7 +37,6 @@ public final class FanServerFactoryBuilder implements StreamFactoryBuilder
     private LongUnaryOperator supplyInitialId;
     private LongUnaryOperator supplyReplyId;
     private LongSupplier supplyTraceId;
-    private LongSupplier supplyCorrelationId;
 
     public FanServerFactoryBuilder(
         FanConfiguration config)
@@ -86,14 +85,6 @@ public final class FanServerFactoryBuilder implements StreamFactoryBuilder
     }
 
     @Override
-    public StreamFactoryBuilder setTargetCorrelationIdSupplier(
-        LongSupplier supplyCorrelationId)
-    {
-        this.supplyCorrelationId = supplyCorrelationId;
-        return this;
-    }
-
-    @Override
     public FanServerFactoryBuilder setGroupBudgetClaimer(
         LongFunction<IntUnaryOperator> groupBudgetClaimer)
     {
@@ -123,7 +114,6 @@ public final class FanServerFactoryBuilder implements StreamFactoryBuilder
                 writeBuffer,
                 supplyInitialId,
                 supplyReplyId,
-                supplyTraceId,
-                supplyCorrelationId);
+                supplyTraceId);
     }
 }
