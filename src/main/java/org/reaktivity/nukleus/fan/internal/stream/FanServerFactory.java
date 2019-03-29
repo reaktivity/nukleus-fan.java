@@ -1,5 +1,5 @@
 /**
- * Copyright 2016-2018 The Reaktivity Project
+ * Copyright 2016-2019 The Reaktivity Project
  *
  * The Reaktivity Project licenses this file to you under the Apache License,
  * version 2.0 (the "License"); you may not use this file except in compliance
@@ -65,7 +65,6 @@ public final class FanServerFactory implements StreamFactory
     private final LongUnaryOperator supplyInitialId;
     private final LongUnaryOperator supplyReplyId;
     private final LongSupplier supplyTraceId;
-    private final LongSupplier supplyCorrelationId;
 
     private final MessageFunction<RouteFW> wrapRoute;
     private final Long2ObjectHashMap<FanServerGroup> groupsByRouteId;
@@ -76,15 +75,13 @@ public final class FanServerFactory implements StreamFactory
         MutableDirectBuffer writeBuffer,
         LongUnaryOperator supplyInitialId,
         LongUnaryOperator supplyReplyId,
-        LongSupplier supplyTraceId,
-        LongSupplier supplyCorrelationId)
+        LongSupplier supplyTraceId)
     {
         this.router = requireNonNull(router);
         this.writeBuffer = requireNonNull(writeBuffer);
         this.supplyInitialId = requireNonNull(supplyInitialId);
         this.supplyReplyId = requireNonNull(supplyReplyId);
         this.supplyTraceId = requireNonNull(supplyTraceId);
-        this.supplyCorrelationId = requireNonNull(supplyCorrelationId);
         this.wrapRoute = this::wrapRoute;
         this.groupsByRouteId = new Long2ObjectHashMap<>();
     }
@@ -119,7 +116,6 @@ public final class FanServerFactory implements StreamFactory
         final MessageConsumer replyTo)
     {
         final long routeId = begin.routeId();
-        final long correlationId = begin.correlationId();
 
         final MessagePredicate filter = (t, b, o, l) -> true;
         final RouteFW route = router.resolve(routeId, begin.authorization(), filter, wrapRoute);
@@ -137,7 +133,6 @@ public final class FanServerFactory implements StreamFactory
                     group,
                     routeId,
                     initialId,
-                    correlationId,
                     replyId,
                     replyTo)::onStream;
         }
@@ -184,7 +179,6 @@ public final class FanServerFactory implements StreamFactory
         private final long routeId;
         private final long initialId;
         private final long replyId;
-        private long correlationId;
         private final MessageConsumer receiver;
         private final List<FanServer> members;
 
@@ -194,17 +188,18 @@ public final class FanServerFactory implements StreamFactory
         private int replyBudget;
         private int replyPadding;
 
+        private boolean replyInitiated;
+
         FanServerGroup(
             long routeId)
         {
             this.routeId = routeId;
             this.initialId = supplyInitialId.applyAsLong(routeId);
             this.replyId = supplyReplyId.applyAsLong(initialId);
-            this.correlationId = supplyCorrelationId.getAsLong();
             this.receiver = router.supplyReceiver(initialId);
             this.members = new CopyOnWriteArrayList<>();
 
-            doBegin(receiver, routeId, initialId, supplyTraceId.getAsLong(), correlationId);
+            doBegin(receiver, routeId, initialId, supplyTraceId.getAsLong());
             router.setThrottle(initialId, this::onThrottle);
         }
 
@@ -263,12 +258,9 @@ public final class FanServerFactory implements StreamFactory
         private void onBegin(
             BeginFW begin)
         {
-            assert correlationId == begin.correlationId();
+            this.replyInitiated = true;
 
             final long traceId = begin.trace();
-
-            this.correlationId = 0L;
-
             for (int i=0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
@@ -409,13 +401,12 @@ public final class FanServerFactory implements StreamFactory
         private int initialBudget;
         private int replyBudget;
         private int replyPadding;
-        private long correlationId;
+        private boolean replyInitiated;
 
         private FanServer(
             FanServerGroup group,
             long routeId,
             long initialId,
-            long correlationId,
             long replyId,
             MessageConsumer receiver)
         {
@@ -423,7 +414,6 @@ public final class FanServerFactory implements StreamFactory
             this.routeId = routeId;
             this.initialId = initialId;
             this.replyId = replyId;
-            this.correlationId = correlationId;
             this.receiver = receiver;
         }
 
@@ -487,8 +477,6 @@ public final class FanServerFactory implements StreamFactory
         private void onBegin(
             BeginFW begin)
         {
-            assert correlationId == begin.correlationId();
-
             sendReplyBegin(supplyTraceId.getAsLong());
             sendInitialWindow(group.initialBudget, group.initialPadding, supplyTraceId.getAsLong(), 0L);
         }
@@ -559,11 +547,11 @@ public final class FanServerFactory implements StreamFactory
         private void sendReplyBegin(
             long traceId)
         {
-            if (group.correlationId == 0L && correlationId != 0L)
+            if (group.replyInitiated && !replyInitiated)
             {
                 router.setThrottle(replyId, this::onThrottle);
-                doBegin(receiver, routeId, replyId, traceId, correlationId);
-                correlationId = 0L;
+                doBegin(receiver, routeId, replyId, traceId);
+                replyInitiated = true;
             }
         }
 
@@ -584,14 +572,12 @@ public final class FanServerFactory implements StreamFactory
         MessageConsumer receiver,
         long routeId,
         long streamId,
-        long traceId,
-        long correlationId)
+        long traceId)
     {
         final BeginFW begin = beginRW.wrap(writeBuffer, 0, writeBuffer.capacity())
                 .routeId(routeId)
                 .streamId(streamId)
                 .trace(traceId)
-                .correlationId(correlationId)
                 .build();
 
         receiver.accept(begin.typeId(), begin.buffer(), begin.offset(), begin.sizeof());
