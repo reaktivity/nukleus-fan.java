@@ -261,7 +261,7 @@ public final class FanServerFactory implements StreamFactory
             this.replyInitiated = true;
 
             final long traceId = begin.trace();
-            for (int i=0; i < members.size(); i++)
+            for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
                 member.sendReplyBegin(traceId);
@@ -280,7 +280,7 @@ public final class FanServerFactory implements StreamFactory
 
             this.replyBudget -= payload.sizeof() + padding;
 
-            for (int i=0; i < members.size(); i++)
+            for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
                 member.sendReplyData(traceId, flags, groupId, padding, payload, extension);
@@ -290,7 +290,7 @@ public final class FanServerFactory implements StreamFactory
         private void onEnd(
             EndFW end)
         {
-            for (int i=0; i < members.size(); i++)
+            for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
                 doEnd(member.receiver, member.routeId, member.replyId);
@@ -302,7 +302,7 @@ public final class FanServerFactory implements StreamFactory
         private void onAbort(
             AbortFW abort)
         {
-            for (int i=0; i < members.size(); i++)
+            for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
                 doAbort(member.receiver, member.routeId, member.replyId);
@@ -314,7 +314,7 @@ public final class FanServerFactory implements StreamFactory
         private void onReset(
             ResetFW reset)
         {
-            for (int i=0; i < members.size(); i++)
+            for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
                 doReset(member.receiver, member.routeId, member.initialId);
@@ -334,7 +334,7 @@ public final class FanServerFactory implements StreamFactory
             this.initialBudget += credit;
             this.initialPadding = padding;
 
-            for (int i=0; i < members.size(); i++)
+            for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
                 member.sendInitialWindow(initialBudget, padding, traceId, groupId);
