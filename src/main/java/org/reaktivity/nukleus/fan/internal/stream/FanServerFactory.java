@@ -274,16 +274,16 @@ public final class FanServerFactory implements StreamFactory
             final long traceId = data.trace();
             final int flags = data.flags();
             final long groupId = data.groupId();
-            final int padding = data.padding();
+            final int reserved = data.reserved();
             final OctetsFW payload = data.payload();
             final OctetsFW extension = data.extension();
 
-            this.replyBudget -= payload.sizeof() + padding;
+            replyBudget -= reserved;
 
             for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
-                member.sendReplyData(traceId, flags, groupId, padding, payload, extension);
+                member.sendReplyData(traceId, flags, groupId, reserved, payload, extension);
             }
         }
 
@@ -351,12 +351,12 @@ public final class FanServerFactory implements StreamFactory
             long traceId,
             int flags,
             long groupId,
-            int padding,
+            int reserved,
             OctetsFW payload,
             OctetsFW extension)
         {
-            this.initialBudget -= payload.sizeof() + padding;
-            doData(receiver, routeId, initialId, traceId, flags, groupId, padding, payload, extension);
+            initialBudget -= reserved;
+            doData(receiver, routeId, initialId, traceId, flags, groupId, reserved, payload, extension);
         }
 
         private void sendReplyWindow(
@@ -487,13 +487,13 @@ public final class FanServerFactory implements StreamFactory
             final long traceId = data.trace();
             final int flags = data.flags();
             final long groupId = data.groupId();
-            final int padding = data.padding();
+            final int reserved = data.reserved();
             final OctetsFW payload = data.payload();
             final OctetsFW extension = data.extension();
 
             // TODO: buffer slot to prevent exceeding budget of fan-in group
-            this.initialBudget -= payload.sizeof() + padding;
-            group.sendInitialData(traceId, flags, groupId, padding, payload, extension);
+            initialBudget -= reserved;
+            group.sendInitialData(traceId, flags, groupId, reserved, payload, extension);
         }
 
         private void onEnd(
@@ -559,12 +559,12 @@ public final class FanServerFactory implements StreamFactory
             long traceId,
             int flags,
             long groupId,
-            int padding,
+            int reserved,
             OctetsFW payload,
             OctetsFW extension)
         {
-            replyBudget -= payload.sizeof() + padding;
-            doData(receiver, routeId, replyId, traceId, flags, groupId, padding, payload, extension);
+            replyBudget -= reserved;
+            doData(receiver, routeId, replyId, traceId, flags, groupId, reserved, payload, extension);
         }
     }
 
@@ -590,7 +590,7 @@ public final class FanServerFactory implements StreamFactory
         long traceId,
         int flags,
         long groupId,
-        int padding,
+        int reserved,
         OctetsFW payload,
         OctetsFW extension)
     {
@@ -600,7 +600,7 @@ public final class FanServerFactory implements StreamFactory
                 .trace(traceId)
                 .flags(flags)
                 .groupId(groupId)
-                .padding(padding)
+                .reserved(reserved)
                 .payload(payload)
                 .extension(extension)
                 .build();

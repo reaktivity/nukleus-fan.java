@@ -15,8 +15,6 @@
  */
 package org.reaktivity.nukleus.fan.internal.stream;
 
-import java.util.function.IntUnaryOperator;
-import java.util.function.LongFunction;
 import java.util.function.LongSupplier;
 import java.util.function.LongUnaryOperator;
 import java.util.function.Supplier;
@@ -81,20 +79,6 @@ public final class FanServerFactoryBuilder implements StreamFactoryBuilder
         LongSupplier supplyTraceId)
     {
         this.supplyTraceId = supplyTraceId;
-        return this;
-    }
-
-    @Override
-    public FanServerFactoryBuilder setGroupBudgetClaimer(
-        LongFunction<IntUnaryOperator> groupBudgetClaimer)
-    {
-        return this;
-    }
-
-    @Override
-    public FanServerFactoryBuilder setGroupBudgetReleaser(
-        LongFunction<IntUnaryOperator> groupBudgetReleaser)
-    {
         return this;
     }
 
