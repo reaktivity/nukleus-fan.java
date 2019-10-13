@@ -17,10 +17,8 @@ package org.reaktivity.nukleus.fan.internal.stream;
 
 import java.util.function.LongSupplier;
 import java.util.function.LongUnaryOperator;
-import java.util.function.Supplier;
 
 import org.agrona.MutableDirectBuffer;
-import org.reaktivity.nukleus.buffer.BufferPool;
 import org.reaktivity.nukleus.fan.internal.FanConfiguration;
 import org.reaktivity.nukleus.route.RouteManager;
 import org.reaktivity.nukleus.stream.StreamFactory;
@@ -75,17 +73,10 @@ public final class FanServerFactoryBuilder implements StreamFactoryBuilder
     }
 
     @Override
-    public StreamFactoryBuilder setTraceSupplier(
+    public StreamFactoryBuilder setTraceIdSupplier(
         LongSupplier supplyTraceId)
     {
         this.supplyTraceId = supplyTraceId;
-        return this;
-    }
-
-    @Override
-    public StreamFactoryBuilder setBufferPoolSupplier(
-        Supplier<BufferPool> supplyBufferPool)
-    {
         return this;
     }
 
