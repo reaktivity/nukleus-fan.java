@@ -64,7 +64,7 @@ public class ServerIT
         "${route}/server/controller",
         "${nukleus}/client.sent.data/client",
         "${target}/client.sent.data/server"})
-    public void shouldSendClientData() throws Exception
+    public void shouldReceiveClientSentData() throws Exception
     {
         k3po.finish();
     }
@@ -74,7 +74,7 @@ public class ServerIT
         "${route}/server/controller",
         "${nukleus}/client.received.data/client",
         "${target}/client.received.data/server"})
-    public void shouldReceiveClientData() throws Exception
+    public void shouldReceiveServerSentData() throws Exception
     {
         k3po.finish();
     }
@@ -84,7 +84,7 @@ public class ServerIT
         "${route}/server/controller",
         "${nukleus}/client.sent.and.received.data/client",
         "${target}/client.sent.and.received.data/server"})
-    public void shouldSendAndReceiveClientData() throws Exception
+    public void shouldEchoClientSentData() throws Exception
     {
         k3po.finish();
     }
@@ -98,7 +98,41 @@ public class ServerIT
         "${nukleus}/client.received.data/client",
         "${nukleus}/client.sent.and.received.data/client",
         "${target}/client.sent.and.received.data/server"})
-    public void shouldSendAndFanoutClientData() throws Exception
+    public void shouldEchoAndFanoutClientData() throws Exception
+    {
+        k3po.finish();
+    }
+
+    @Test
+    @Specification({
+        "${route}/server/controller",
+        "${nukleus}/client.sent.flush/client",
+        "${target}/client.sent.flush/server"})
+    public void shouldReceiveClientSentFlush() throws Exception
+    {
+        k3po.finish();
+    }
+
+    @Test
+    @Specification({
+        "${route}/server/controller",
+        "${nukleus}/server.sent.flush/client",
+        "${target}/server.sent.flush/server"})
+    public void shouldReceiveServerSentFlush() throws Exception
+    {
+        k3po.finish();
+    }
+
+    @Test
+    @Specification({
+        "${route}/server/controller",
+        "${nukleus}/server.sent.flush/client",
+        "${nukleus}/server.sent.flush/client",
+        "${nukleus}/server.sent.flush/client",
+        "${nukleus}/server.sent.flush/client",
+        "${nukleus}/server.sent.flush/client",
+        "${target}/server.sent.flush/server"})
+    public void shouldFanoutServerSentFlush() throws Exception
     {
         k3po.finish();
     }

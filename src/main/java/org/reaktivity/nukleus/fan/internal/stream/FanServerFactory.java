@@ -32,6 +32,7 @@ import org.reaktivity.nukleus.fan.internal.types.stream.AbortFW;
 import org.reaktivity.nukleus.fan.internal.types.stream.BeginFW;
 import org.reaktivity.nukleus.fan.internal.types.stream.DataFW;
 import org.reaktivity.nukleus.fan.internal.types.stream.EndFW;
+import org.reaktivity.nukleus.fan.internal.types.stream.FlushFW;
 import org.reaktivity.nukleus.fan.internal.types.stream.ResetFW;
 import org.reaktivity.nukleus.fan.internal.types.stream.WindowFW;
 import org.reaktivity.nukleus.function.MessageConsumer;
@@ -48,11 +49,13 @@ public final class FanServerFactory implements StreamFactory
     private final DataFW dataRO = new DataFW();
     private final EndFW endRO = new EndFW();
     private final AbortFW abortRO = new AbortFW();
+    private final FlushFW flushRO = new FlushFW();
 
     private final BeginFW.Builder beginRW = new BeginFW.Builder();
     private final DataFW.Builder dataRW = new DataFW.Builder();
     private final EndFW.Builder endRW = new EndFW.Builder();
     private final AbortFW.Builder abortRW = new AbortFW.Builder();
+    private final FlushFW.Builder flushRW = new FlushFW.Builder();
 
     private final WindowFW windowRO = new WindowFW();
     private final ResetFW resetRO = new ResetFW();
@@ -231,6 +234,10 @@ public final class FanServerFactory implements StreamFactory
                 final AbortFW abort = abortRO.wrap(buffer, index, index + length);
                 onAbort(abort);
                 break;
+            case FlushFW.TYPE_ID:
+                final FlushFW flush = flushRO.wrap(buffer, index, index + length);
+                onFlush(flush);
+                break;
             default:
                 doReset(receiver, routeId, initialId, initialSeq, initialAck, initialMax);
                 break;
@@ -325,6 +332,21 @@ public final class FanServerFactory implements StreamFactory
             doAbort(receiver, routeId, replyId, replySeq, replyAck, replyMax);
         }
 
+        private void onFlush(
+            FlushFW flush)
+        {
+            final long budgetId = flush.budgetId();
+            final int reserved = flush.reserved();
+
+            for (int i = 0; i < members.size(); i++)
+            {
+                final FanServer member = members.get(i);
+                doFlush(member.receiver, member.routeId, member.replyId,
+                        member.replySeq, member.replyAck, member.replyMax,
+                        budgetId, reserved);
+            }
+        }
+
         private void onReset(
             ResetFW reset)
         {
@@ -387,6 +409,14 @@ public final class FanServerFactory implements StreamFactory
 
             initialSeq += reserved;
             assert initialSeq <= initialAck + initialMax;
+        }
+
+        private void sendInitialFlush(
+            long traceId,
+            long budgetId,
+            int reserved)
+        {
+            doFlush(receiver, routeId, initialId, initialSeq, initialAck, initialMax, budgetId, reserved);
         }
 
         private void sendReplyWindow(
@@ -479,6 +509,10 @@ public final class FanServerFactory implements StreamFactory
                 onAbort(abort);
                 group.leave(this);
                 break;
+            case FlushFW.TYPE_ID:
+                final FlushFW flush = flushRO.wrap(buffer, index, index + length);
+                onFlush(flush);
+                break;
             case ResetFW.TYPE_ID:
                 final ResetFW reset = resetRO.wrap(buffer, index, index + length);
                 onReset(reset);
@@ -536,6 +570,16 @@ public final class FanServerFactory implements StreamFactory
             AbortFW abort)
         {
             doAbort(receiver, routeId, replyId, replySeq, replyAck, replyMax);
+        }
+
+        private void onFlush(
+            FlushFW flush)
+        {
+            final long traceId = flush.traceId();
+            final long budgetId = flush.budgetId();
+            final int reserved = flush.reserved();
+
+            group.sendInitialFlush(traceId, budgetId, reserved);
         }
 
         private void onReset(
@@ -686,6 +730,30 @@ public final class FanServerFactory implements StreamFactory
                 .build();
 
         receiver.accept(abort.typeId(), abort.buffer(), abort.offset(), abort.sizeof());
+    }
+
+    private void doFlush(
+        MessageConsumer receiver,
+        long routeId,
+        long streamId,
+        long sequence,
+        long acknowledge,
+        int maximum,
+        long budgetId,
+        int reserved)
+    {
+        final FlushFW flush = flushRW.wrap(writeBuffer, 0, writeBuffer.capacity())
+                .routeId(routeId)
+                .streamId(streamId)
+                .sequence(sequence)
+                .acknowledge(acknowledge)
+                .maximum(maximum)
+                .traceId(supplyTraceId.getAsLong())
+                .budgetId(budgetId)
+                .reserved(reserved)
+                .build();
+
+        receiver.accept(flush.typeId(), flush.buffer(), flush.offset(), flush.sizeof());
     }
 
     private void doEnd(
