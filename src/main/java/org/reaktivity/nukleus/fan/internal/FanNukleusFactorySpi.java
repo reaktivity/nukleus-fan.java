@@ -15,8 +15,8 @@
  */
 package org.reaktivity.nukleus.fan.internal;
 
-import org.reaktivity.nukleus.Configuration;
-import org.reaktivity.nukleus.NukleusFactorySpi;
+import org.reaktivity.reaktor.nukleus.Configuration;
+import org.reaktivity.reaktor.nukleus.NukleusFactorySpi;
 
 public final class FanNukleusFactorySpi implements NukleusFactorySpi
 {
