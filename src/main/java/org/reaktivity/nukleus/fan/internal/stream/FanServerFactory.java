@@ -15,9 +15,14 @@
  */
 package org.reaktivity.nukleus.fan.internal.stream;
 
+import static org.reaktivity.reaktor.nukleus.budget.BudgetCreditor.NO_BUDGET_ID;
+import static org.reaktivity.reaktor.nukleus.budget.BudgetCreditor.NO_CREDITOR_INDEX;
+import static org.reaktivity.reaktor.nukleus.budget.BudgetDebitor.NO_DEBITOR_INDEX;
+
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.function.LongFunction;
 import java.util.function.LongSupplier;
 import java.util.function.LongUnaryOperator;
 
@@ -35,6 +40,8 @@ import org.reaktivity.nukleus.fan.internal.types.stream.ResetFW;
 import org.reaktivity.nukleus.fan.internal.types.stream.WindowFW;
 import org.reaktivity.reaktor.config.Binding;
 import org.reaktivity.reaktor.nukleus.ElektronContext;
+import org.reaktivity.reaktor.nukleus.budget.BudgetCreditor;
+import org.reaktivity.reaktor.nukleus.budget.BudgetDebitor;
 import org.reaktivity.reaktor.nukleus.function.MessageConsumer;
 import org.reaktivity.reaktor.nukleus.stream.StreamFactory;
 
@@ -62,9 +69,12 @@ public final class FanServerFactory implements FanStreamFactory
 
     private final MutableDirectBuffer writeBuffer;
     private final StreamFactory streamFactory;
+    private final BudgetCreditor creditor;
+    private final LongFunction<BudgetDebitor> supplyDebitor;
     private final LongUnaryOperator supplyInitialId;
     private final LongUnaryOperator supplyReplyId;
     private final LongSupplier supplyTraceId;
+    private final LongSupplier supplyBudgetId;
 
     private final Long2ObjectHashMap<FanServerGroup> groupsByRouteId;
 
@@ -74,9 +84,12 @@ public final class FanServerFactory implements FanStreamFactory
     {
         this.writeBuffer = context.writeBuffer();
         this.streamFactory = context.streamFactory();
+        this.creditor = context.creditor();
+        this.supplyDebitor = context::supplyDebitor;
         this.supplyInitialId = context::supplyInitialId;
         this.supplyReplyId = context::supplyReplyId;
         this.supplyTraceId = context::supplyTraceId;
+        this.supplyBudgetId = context::supplyBudgetId;
         this.bindings = new Long2ObjectHashMap<>();
         this.groupsByRouteId = new Long2ObjectHashMap<>();
     }
@@ -145,13 +158,14 @@ public final class FanServerFactory implements FanStreamFactory
         private long initialAck;
         private int initialMax;
         private int initialPad;
-        private long initialBudgetId;
+        private long initialBud;
+        private long initialBudIndex;
 
         private long replySeq;
         private long replyAck;
         private int replyMax;
 
-        private boolean replyInitiated;
+        private int state;
 
         FanServerGroup(
             long routeId)
@@ -164,6 +178,7 @@ public final class FanServerFactory implements FanStreamFactory
             long traceId = supplyTraceId.getAsLong();
             this.receiver = newStream(this::onGroupMessage, routeId,
                     initialId, initialSeq, initialAck, initialMax, traceId, 0L, 0L, e -> {});
+            this.state = FanState.openingInitial(state);
         }
 
         private void onGroupMessage(
@@ -211,7 +226,7 @@ public final class FanServerFactory implements FanStreamFactory
         private void onGroupBegin(
             BeginFW begin)
         {
-            this.replyInitiated = true;
+            state = FanState.openingReply(state);
 
             final long traceId = begin.traceId();
             final long affinity = begin.affinity();
@@ -251,6 +266,8 @@ public final class FanServerFactory implements FanStreamFactory
         private void onGroupEnd(
             EndFW end)
         {
+            state = FanState.closedReply(state);
+
             for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
@@ -258,12 +275,14 @@ public final class FanServerFactory implements FanStreamFactory
                         member.replySeq, member.replyAck, member.replyMax);
             }
 
-            doEnd(receiver, routeId, replyId, replySeq, replyAck, replyMax);
+            doGroupEnd();
         }
 
         private void onGroupAbort(
             AbortFW abort)
         {
+            state = FanState.closedReply(state);
+
             for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
@@ -271,7 +290,7 @@ public final class FanServerFactory implements FanStreamFactory
                         member.replySeq, member.replyAck, member.replyMax);
             }
 
-            doAbort(receiver, routeId, replyId, replySeq, replyAck, replyMax);
+            doGroupAbort();
         }
 
         private void onGroupFlush(
@@ -292,6 +311,8 @@ public final class FanServerFactory implements FanStreamFactory
         private void onGroupReset(
             ResetFW reset)
         {
+            state = FanState.closedInitial(state);
+
             for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
@@ -299,7 +320,7 @@ public final class FanServerFactory implements FanStreamFactory
                         member.initialSeq, member.initialAck, member.initialMax);
             }
 
-            doReset(receiver, routeId, initialId, initialSeq, initialAck, initialMax);
+            doGroupReset();
         }
 
         private void onGroupWindow(
@@ -317,18 +338,38 @@ public final class FanServerFactory implements FanStreamFactory
             assert acknowledge >= initialAck;
             assert maximum >= initialMax;
 
+            final long credit = Math.max(maximum - initialMax + acknowledge - initialAck, 0);
             this.initialAck = acknowledge;
             this.initialMax = maximum;
             this.initialPad = padding;
-            this.initialBudgetId = budgetId;
 
             assert initialAck <= initialSeq;
+
+            if (!FanState.initialOpened(state))
+            {
+                long initialBudIndex = NO_CREDITOR_INDEX;
+                long initialBud = budgetId;
+                if (initialBud == NO_BUDGET_ID)
+                {
+                    initialBud = supplyBudgetId.getAsLong();
+                    initialBudIndex = creditor.acquire(initialBud);
+                }
+                this.initialBud = initialBud;
+                this.initialBudIndex = initialBudIndex;
+
+                state = FanState.openedInitial(state);
+            }
+
+            if (initialBudIndex != NO_CREDITOR_INDEX && credit > 0)
+            {
+                creditor.credit(traceId, initialBudIndex, credit);
+            }
 
             final int pendingAck = (int)(initialSeq - initialAck);
             for (int i = 0; i < members.size(); i++)
             {
                 final FanServer member = members.get(i);
-                member.doMemberWindow(traceId, budgetId, initialMax, pendingAck, initialPad);
+                member.doMemberWindow(traceId, initialBud, initialMax, pendingAck, initialPad);
             }
         }
 
@@ -353,6 +394,30 @@ public final class FanServerFactory implements FanStreamFactory
             assert initialSeq <= initialAck + initialMax;
         }
 
+        private void doGroupEnd()
+        {
+            if (!FanState.initialClosed(state))
+            {
+                state = FanState.closedInitial(state);
+
+                doEnd(receiver, routeId, initialId, replySeq, replyAck, replyMax);
+
+                cleanupInitial();
+            }
+        }
+
+        private void doGroupAbort()
+        {
+            if (!FanState.initialClosed(state))
+            {
+                state = FanState.closedInitial(state);
+
+                doAbort(receiver, routeId, initialId, replySeq, replyAck, replyMax);
+
+                cleanupInitial();
+            }
+        }
+
         private void doGroupFlush(
             long traceId,
             long budgetId,
@@ -361,21 +426,53 @@ public final class FanServerFactory implements FanStreamFactory
             doFlush(receiver, routeId, initialId, initialSeq, initialAck, initialMax, budgetId, reserved);
         }
 
-        private void doGroupWindow(
-            long traceId,
-            long budgetId,
-            int windowMax,
-            int pendingAck,
-            int paddingMin)
+        private void doGroupReset()
         {
-            long replyAckMax = Math.max(replySeq - pendingAck, replyAck);
-            if (replyAckMax > replyAck || windowMax > replyMax)
+            if (!FanState.replyClosed(state))
             {
-                replyAck = replyAckMax;
-                replyMax = windowMax;
+                state = FanState.closedReply(state);
+
+                doReset(receiver, routeId, initialId, initialSeq, initialAck, initialMax);
+
+                cleanupInitial();
+            }
+        }
+
+        private void doGroupWindow(
+            long traceId)
+        {
+            int windowMax = 0;
+            int pendingAck = 0;
+            int paddingMin = 0;
+
+            // TODO: optimize, cache
+            for (int i = 0; i < members.size(); i++)
+            {
+                final FanServer member = members.get(i);
+                windowMax = Math.max(windowMax, member.replyMax);
+                pendingAck = Math.max(pendingAck, (int)(member.replySeq - member.replyAck));
+                paddingMin = Math.max(paddingMin, member.replyPad);
+            }
+
+            long replyAckMax = Math.max(replySeq - pendingAck, replyAck);
+            if (replyAckMax > replyAck || windowMax > replyMax || !FanState.replyOpened(state))
+            {
+                replyAck = Math.max(replyAck, replyAckMax);
+                replyMax = Math.max(replyMax, windowMax);
                 assert replyAck <= replySeq;
 
-                doWindow(receiver, routeId, replyId, replySeq, replyAck, replyMax, traceId, budgetId, paddingMin);
+                state = FanState.openedReply(state);
+
+                doWindow(receiver, routeId, replyId, replySeq, replyAck, replyMax, traceId, 0L, paddingMin);
+            }
+        }
+
+        private void cleanupInitial()
+        {
+            if (initialBudIndex != NO_CREDITOR_INDEX)
+            {
+                creditor.release(initialBudIndex);
+                initialBudIndex = NO_CREDITOR_INDEX;
             }
         }
 
@@ -408,7 +505,11 @@ public final class FanServerFactory implements FanStreamFactory
         private long replyAck;
         private int replyMax;
         private int replyPad;
-        private boolean replyInitiated;
+        private long replyBud;
+        private long replyBudIndex;
+        private BudgetDebitor replyDeb;
+
+        private int state;
 
         private FanServer(
             FanServerGroup group,
@@ -474,9 +575,15 @@ public final class FanServerFactory implements FanStreamFactory
         {
             final long affinity = begin.affinity();
 
+            state = FanState.openingInitial(state);
+
             doMemberBegin(supplyTraceId.getAsLong(), affinity);
-            doMemberWindow(supplyTraceId.getAsLong(), group.initialBudgetId, group.initialMax,
-                    (int)(group.initialSeq - group.initialAck), group.initialPad);
+
+            if (FanState.initialOpened(group.state))
+            {
+                doMemberWindow(supplyTraceId.getAsLong(), group.initialBud, group.initialMax,
+                        (int)(group.initialSeq - group.initialAck), group.initialPad);
+            }
         }
 
         private void onMemberData(
@@ -498,20 +605,23 @@ public final class FanServerFactory implements FanStreamFactory
 
             assert initialAck <= initialSeq;
 
-            // TODO: buffer slot to prevent exceeding budget of fan-in group
             group.doGroupData(traceId, flags, budgetId, reserved, payload, extension);
         }
 
         private void onMemberEnd(
             EndFW end)
         {
-            doEnd(receiver, routeId, replyId, replySeq, replyAck, replyMax);
+            state = FanState.closedInitial(state);
+
+            doMemberEnd();
         }
 
         private void onMemberAbort(
             AbortFW abort)
         {
-            doAbort(receiver, routeId, replyId, replySeq, replyAck, replyMax);
+            state = FanState.closedInitial(state);
+
+            doMemberAbort();
         }
 
         private void onMemberFlush(
@@ -527,7 +637,11 @@ public final class FanServerFactory implements FanStreamFactory
         private void onMemberReset(
             ResetFW reset)
         {
-            doReset(receiver, routeId, initialId, initialSeq, initialAck, initialMax);
+            state = FanState.closedReply(state);
+
+            cleanupReply();
+
+            doMemberReset();
         }
 
         private void onMemberWindow(
@@ -548,10 +662,33 @@ public final class FanServerFactory implements FanStreamFactory
             this.replyAck = acknowledge;
             this.replyMax = maximum;
             this.replyPad = padding;
+            this.replyBud = budgetId;
 
             assert replyAck <= replySeq;
 
-            group.doGroupWindow(traceId, budgetId, replyMax, (int)(replySeq - replyAck), replyPad);
+            if (!FanState.replyOpened(state))
+            {
+                state = FanState.openedReply(state);
+
+                if (replyBud != NO_BUDGET_ID)
+                {
+                    replyDeb = supplyDebitor.apply(replyBud);
+                    replyBudIndex = replyDeb.acquire(replyBud, replyId,
+                        tid -> replyDeb.claim(tid, replyBudIndex, replyId, 0, 0, 0));
+                }
+            }
+
+            group.doGroupWindow(traceId);
+        }
+
+        private void doMemberReset()
+        {
+            if (!FanState.initialClosed(state))
+            {
+                state = FanState.closedInitial(state);
+
+                doReset(receiver, routeId, initialId, initialSeq, initialAck, initialMax);
+            }
         }
 
         private void doMemberWindow(
@@ -562,11 +699,13 @@ public final class FanServerFactory implements FanStreamFactory
             int paddingMin)
         {
             long initialAckMax = Math.max(initialSeq - pendingAck, initialAck);
-            if (initialAckMax > initialAck || windowMax > initialMax)
+            if (initialAckMax > initialAck || windowMax > initialMax || !FanState.initialOpened(state))
             {
                 initialAck = initialAckMax;
                 initialMax = windowMax;
                 assert initialAck <= initialSeq;
+
+                state = FanState.openedInitial(state);
 
                 doWindow(receiver, routeId, initialId, initialSeq, initialAck, initialMax, traceId, budgetId, paddingMin);
             }
@@ -576,10 +715,11 @@ public final class FanServerFactory implements FanStreamFactory
             long traceId,
             long affinity)
         {
-            if (group.replyInitiated && !replyInitiated)
+            if (FanState.replyOpening(group.state) && !FanState.replyOpening(state))
             {
+                state = FanState.openingReply(state);
+
                 doBegin(receiver, routeId, replyId, replySeq, replyAck, replyMax, traceId, affinity);
-                replyInitiated = true;
             }
         }
 
@@ -591,11 +731,50 @@ public final class FanServerFactory implements FanStreamFactory
             OctetsFW payload,
             OctetsFW extension)
         {
-            doData(receiver, routeId, replyId, replySeq, replyAck, replyMax, traceId, flags,
-                    budgetId, reserved, payload, extension);
+            if (replyBud != NO_BUDGET_ID)
+            {
+                reserved = replyDeb.claim(traceId, replyBudIndex, replyId, reserved, reserved, 0);
+            }
 
-            replySeq += reserved;
-            assert replySeq <= replyAck + replyMax;
+            // TODO: cache + replay
+            if (reserved != 0L)
+            {
+                doData(receiver, routeId, replyId, replySeq, replyAck, replyMax, traceId, flags,
+                        replyBud, reserved, payload, extension);
+
+                replySeq += reserved;
+                assert replySeq <= replyAck + replyMax;
+            }
+        }
+
+        private void doMemberEnd()
+        {
+            if (!FanState.replyClosed(state))
+            {
+                state = FanState.closedReply(state);
+
+                doEnd(receiver, routeId, replyId, replySeq, replyAck, replyMax);
+            }
+        }
+
+        private void doMemberAbort()
+        {
+            if (!FanState.replyClosed(state))
+            {
+                state = FanState.closedReply(state);
+
+                doAbort(receiver, routeId, replyId, replySeq, replyAck, replyMax);
+            }
+        }
+
+        private void cleanupReply()
+        {
+            if (replyBud != NO_BUDGET_ID)
+            {
+                replyDeb.release(replyBudIndex, replyId);
+                replyBudIndex = NO_DEBITOR_INDEX;
+                replyDeb = null;
+            }
         }
     }
 
