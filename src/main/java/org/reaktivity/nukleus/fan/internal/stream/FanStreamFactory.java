@@ -13,13 +13,16 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
-module org.reaktivity.nukleus.fan
+package org.reaktivity.nukleus.fan.internal.stream;
+
+import org.reaktivity.reaktor.config.Binding;
+import org.reaktivity.reaktor.nukleus.stream.StreamFactory;
+
+public interface FanStreamFactory extends StreamFactory
 {
-    requires org.reaktivity.nukleus;
+    void attach(
+        Binding binding);
 
-    provides org.reaktivity.nukleus.NukleusFactorySpi
-        with org.reaktivity.nukleus.fan.internal.FanNukleusFactorySpi;
-
-    provides org.reaktivity.nukleus.ControllerFactorySpi
-        with org.reaktivity.nukleus.fan.internal.FanControllerFactorySpi;
+    void detach(
+        long bindingId);
 }
