@@ -17,7 +17,6 @@ package org.reaktivity.nukleus.fan.internal.streams;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.rules.RuleChain.outerRule;
-import static org.reaktivity.reaktor.test.ReaktorRule.EXTERNAL_AFFINITY_MASK;
 
 import org.junit.Rule;
 import org.junit.Test;
@@ -27,13 +26,13 @@ import org.junit.rules.Timeout;
 import org.kaazing.k3po.junit.annotation.Specification;
 import org.kaazing.k3po.junit.rules.K3poRule;
 import org.reaktivity.reaktor.test.ReaktorRule;
+import org.reaktivity.reaktor.test.annotation.Configuration;
 
 public class ServerIT
 {
     private final K3poRule k3po = new K3poRule()
-            .addScriptRoot("route", "org/reaktivity/specification/nukleus/fan/control/route")
-            .addScriptRoot("nukleus", "org/reaktivity/specification/nukleus/fan/streams/server")
-            .addScriptRoot("target", "org/reaktivity/specification/fan/server");
+        .addScriptRoot("net", "org/reaktivity/specification/nukleus/fan/streams/network")
+        .addScriptRoot("app", "org/reaktivity/specification/nukleus/fan/streams/application");
 
     private final TestRule timeout = new DisableOnDebug(new Timeout(10, SECONDS));
 
@@ -42,96 +41,96 @@ public class ServerIT
         .commandBufferCapacity(1024)
         .responseBufferCapacity(1024)
         .counterValuesBufferCapacity(4096)
-        .nukleus("fan"::equals)
-        .affinityMask("target#0", EXTERNAL_AFFINITY_MASK)
+        .configurationRoot("org/reaktivity/specification/nukleus/fan/config")
+        .external("app#0")
         .clean();
 
     @Rule
     public final TestRule chain = outerRule(reaktor).around(k3po).around(timeout);
 
     @Test
+    @Configuration("server.json")
     @Specification({
-        "${route}/server/controller",
-        "${nukleus}/client.connected/client",
-        "${target}/client.connected/server"})
+        "${net}/client.connected/client",
+        "${app}/client.connected/server"})
     public void shouldConnect() throws Exception
     {
         k3po.finish();
     }
 
     @Test
+    @Configuration("server.json")
     @Specification({
-        "${route}/server/controller",
-        "${nukleus}/client.sent.data/client",
-        "${target}/client.sent.data/server"})
+        "${net}/client.sent.data/client",
+        "${app}/client.sent.data/server"})
     public void shouldReceiveClientSentData() throws Exception
     {
         k3po.finish();
     }
 
     @Test
+    @Configuration("server.json")
     @Specification({
-        "${route}/server/controller",
-        "${nukleus}/client.received.data/client",
-        "${target}/client.received.data/server"})
+        "${net}/client.received.data/client",
+        "${app}/client.received.data/server"})
     public void shouldReceiveServerSentData() throws Exception
     {
         k3po.finish();
     }
 
     @Test
+    @Configuration("server.json")
     @Specification({
-        "${route}/server/controller",
-        "${nukleus}/client.sent.and.received.data/client",
-        "${target}/client.sent.and.received.data/server"})
+        "${net}/client.sent.and.received.data/client",
+        "${app}/client.sent.and.received.data/server"})
     public void shouldEchoClientSentData() throws Exception
     {
         k3po.finish();
     }
 
     @Test
+    @Configuration("server.json")
     @Specification({
-        "${route}/server/controller",
-        "${nukleus}/client.received.data/client",
-        "${nukleus}/client.received.data/client",
-        "${nukleus}/client.received.data/client",
-        "${nukleus}/client.received.data/client",
-        "${nukleus}/client.sent.and.received.data/client",
-        "${target}/client.sent.and.received.data/server"})
+        "${net}/client.received.data/client",
+        "${net}/client.received.data/client",
+        "${net}/client.received.data/client",
+        "${net}/client.received.data/client",
+        "${net}/client.sent.and.received.data/client",
+        "${app}/client.sent.and.received.data/server"})
     public void shouldEchoAndFanoutClientData() throws Exception
     {
         k3po.finish();
     }
 
     @Test
+    @Configuration("server.json")
     @Specification({
-        "${route}/server/controller",
-        "${nukleus}/client.sent.flush/client",
-        "${target}/client.sent.flush/server"})
+        "${net}/client.sent.flush/client",
+        "${app}/client.sent.flush/server"})
     public void shouldReceiveClientSentFlush() throws Exception
     {
         k3po.finish();
     }
 
     @Test
+    @Configuration("server.json")
     @Specification({
-        "${route}/server/controller",
-        "${nukleus}/server.sent.flush/client",
-        "${target}/server.sent.flush/server"})
+        "${net}/server.sent.flush/client",
+        "${app}/server.sent.flush/server"})
     public void shouldReceiveServerSentFlush() throws Exception
     {
         k3po.finish();
     }
 
     @Test
+    @Configuration("server.json")
     @Specification({
-        "${route}/server/controller",
-        "${nukleus}/server.sent.flush/client",
-        "${nukleus}/server.sent.flush/client",
-        "${nukleus}/server.sent.flush/client",
-        "${nukleus}/server.sent.flush/client",
-        "${nukleus}/server.sent.flush/client",
-        "${target}/server.sent.flush/server"})
+        "${net}/server.sent.flush/client",
+        "${net}/server.sent.flush/client",
+        "${net}/server.sent.flush/client",
+        "${net}/server.sent.flush/client",
+        "${net}/server.sent.flush/client",
+        "${app}/server.sent.flush/server"})
     public void shouldFanoutServerSentFlush() throws Exception
     {
         k3po.finish();

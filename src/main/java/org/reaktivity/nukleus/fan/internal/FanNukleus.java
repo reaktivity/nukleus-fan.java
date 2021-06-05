@@ -15,7 +15,8 @@
  */
 package org.reaktivity.nukleus.fan.internal;
 
-import org.reaktivity.nukleus.Nukleus;
+import org.reaktivity.reaktor.nukleus.ElektronContext;
+import org.reaktivity.reaktor.nukleus.Nukleus;
 
 final class FanNukleus implements Nukleus
 {
@@ -42,8 +43,9 @@ final class FanNukleus implements Nukleus
     }
 
     @Override
-    public FanElektron supplyElektron()
+    public FanElektron supplyElektron(
+        ElektronContext context)
     {
-        return new FanElektron(config);
+        return new FanElektron(config, context);
     }
 }
